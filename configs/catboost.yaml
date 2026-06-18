@@ -1,0 +1,14 @@
+name: catboost_baseline
+model: catboost
+feature_set: baseline
+seed: 42
+n_folds: 5
+time_holdout_frac: 0.2
+num_boost_round: 5000
+early_stopping_rounds: 200
+notes: "Phase 2: CatBoost on baseline aggregates, same folds as lgbm_baseline. For ensemble diversity."
+params:
+  learning_rate: 0.03
+  depth: 8
+  l2_leaf_reg: 3.0
+  subsample: 0.8

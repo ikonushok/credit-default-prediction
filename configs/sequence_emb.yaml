@@ -1,0 +1,17 @@
+name: sequence_emb_bigru
+model: sequence
+feature_set: raw_sequence
+seed: 42
+n_folds: 5
+notes: "Phase 3 (#1): per-column embeddings + bidirectional GRU over product sequence. Compare OOF vs sequence_gru (scaled-numeric) on same folds."
+params:
+  emb_dim: 8
+  hidden: 128
+  layers: 1
+  dropout: 0.1
+  bidirectional: true
+  lr: 0.001
+  epochs: 8
+  batch_size: 2048
+  max_len: 40
+  patience: 2

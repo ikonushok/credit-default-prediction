@@ -1,0 +1,17 @@
+name: lgbm_v2
+model: lgbm
+feature_set: v2
+seed: 42
+n_folds: 5
+time_holdout_frac: 0.2
+num_boost_round: 5000
+early_stopping_rounds: 200
+notes: "Phase 2: baseline + term_gaps + delinq_share + paym_trend blocks. Compare OOF vs lgbm_baseline on identical folds."
+params:
+  learning_rate: 0.03
+  num_leaves: 127
+  feature_fraction: 0.7
+  bagging_fraction: 0.8
+  bagging_freq: 1
+  min_child_samples: 200
+  lambda_l2: 1.0

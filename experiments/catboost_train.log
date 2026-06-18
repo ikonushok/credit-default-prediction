@@ -1,0 +1,11 @@
+[train] 2,100,000 ids x 182 features; pos rate 0.0355
+[catboost] fold 0: best_iter=1446 auc=0.75674
+[catboost] fold 1: best_iter=1670 auc=0.75968
+[catboost] fold 2: best_iter=1637 auc=0.75086
+[catboost] fold 3: best_iter=1506 auc=0.75322
+[catboost] fold 4: best_iter=1582 auc=0.75337
+[train] OOF ROC-AUC=0.75475  PR-AUC=0.10898  fold mean±std=0.75477±0.00309
+[lgbm] fold 0: best_iter=426 auc=0.72954
+[lgbm] fold 1: best_iter=155 auc=0.73996
+[train] time-holdout ROC-AUC (latest 20% ids)=0.72954 (random-CV OOF=0.75475; gap=+0.02521)
+[train] run_id=20260618_224057_catboost_baseline  artifacts in /Users/bobrsubr/PycharmProjects/_researches/credit-default-prediction/artifacts/20260618_224057_catboost_baseline

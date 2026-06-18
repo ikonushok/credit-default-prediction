@@ -1,0 +1,15 @@
+name: sequence_gru
+model: sequence
+feature_set: raw_sequence
+seed: 42
+n_folds: 5
+notes: "Phase 3: GRU over per-id product sequence (rn order), 59 features/step. OOF aligns with GBDT folds for ensembling."
+params:
+  hidden: 128
+  layers: 1
+  dropout: 0.1
+  lr: 0.001
+  epochs: 6
+  batch_size: 2048
+  max_len: 40
+  patience: 2
