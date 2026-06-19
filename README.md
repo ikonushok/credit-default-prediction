@@ -211,33 +211,6 @@ Rank-нормализация выполняется для выравниван
 - L4 — robustness checks, alternative splits, leakage review, ансамбль.
 - L5 — submission readiness: sample-format check, hash, submission card, red-team review.
 
-## Стартовая команда для Codex
-
-    Use AGENTS.md + agents/context_router.md + agents/data_quality.md + agents/test_validation.md.
-
-    Mode: data_quality_review.
-
-    Task: Inspect train_data.parquet, test_data.parquet, train_target.csv, and
-    sample_submission.csv for the Alfa Bank credit-scoring (default prediction) task.
-
-    Inputs:
-    - data/raw/train_data.parquet
-    - data/raw/test_data.parquet
-    - data/raw/train_target.csv
-    - data/Кредитный скорринг/sample_submission.csv
-
-    Constraints:
-    - Do not train a model yet.
-    - Do not use flag outside train labels; join it by id only.
-    - Inspect the full 61-column schema.
-    - Check target distribution, train/test schema compatibility, long-format
-      rows-per-id, id-set alignment, id-range temporal drift, and
-      sample_submission compatibility.
-    - Report achieved validation level.
-
-    Stop if data files are missing, train/test schema cannot be aligned, target
-    has unexpected values, or test ids cannot be mapped to sample_submission.
-
 ## Текущий статус
 
 **Public best: 78.261** (ROC-AUC × 100). Пайплайн реализован и прогнан end-to-end. Стадия: ансамбль Embedding bi-GRU + GBDT.
