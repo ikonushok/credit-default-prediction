@@ -1,0 +1,18 @@
+name: sequence_emb_attn
+model: sequence
+feature_set: raw_sequence
+seed: 42
+n_folds: 5
+notes: "Phase 3 #1: attention-pooling + capacity bump (hidden 192, emb 12, max_len 55). Compare OOF vs sequence_emb_bigru (0.7798)."
+params:
+  emb_dim: 12
+  hidden: 192
+  layers: 1
+  dropout: 0.1
+  bidirectional: true
+  pooling: attention
+  lr: 0.001
+  epochs: 10
+  batch_size: 2048
+  max_len: 55
+  patience: 2
