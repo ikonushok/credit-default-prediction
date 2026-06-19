@@ -29,3 +29,19 @@
 [seq] fold 3 epoch 0: val_auc=0.76865
 [seq] fold 3 epoch 1: val_auc=0.77381
 [seq] fold 3 epoch 2: val_auc=0.77482
+[seq] fold 3 epoch 3: val_auc=0.77634
+[seq] fold 3 epoch 4: val_auc=0.77726
+[seq] fold 3 epoch 5: val_auc=0.77744
+[seq] fold 3 epoch 6: val_auc=0.77580
+[seq] fold 3 epoch 7: val_auc=0.77590
+[seq] fold 3: best val_auc=0.77744
+[seq] fold 4 epoch 0: val_auc=0.76973
+[seq] fold 4 epoch 1: val_auc=0.77469
+[seq] fold 4 epoch 2: val_auc=0.77869
+[seq] fold 4 epoch 3: val_auc=0.78000
+[seq] fold 4 epoch 4: val_auc=0.78133
+[seq] fold 4 epoch 5: val_auc=0.78083
+[seq] fold 4 epoch 6: val_auc=0.78047
+[seq] fold 4: best val_auc=0.78133
+[seq] OOF ROC-AUC=0.77982  PR-AUC=0.12633  fold mean±std=0.78054±0.00243
+[seq] run_id=20260619_073439_sequence_emb_bigru  artifacts in /Users/bobrsubr/PycharmProjects/_researches/credit-default-prediction/artifacts/20260619_073439_sequence_emb_bigru

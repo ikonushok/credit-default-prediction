@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 from torch import nn
-from torch.nn.utils.rnn import pack_padded_sequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from .. import config as C
 from .. import metrics
@@ -69,7 +69,8 @@ def _make_batch(store: SeqStore, idx: np.ndarray, max_len: int):
 
 class EmbGRUClassifier(nn.Module):
     def __init__(self, cards: np.ndarray, emb_dim: int = 8, hidden: int = 128,
-                 layers: int = 1, dropout: float = 0.1, bidirectional: bool = True):
+                 layers: int = 1, dropout: float = 0.1, bidirectional: bool = True,
+                 pooling: str = "last"):
         super().__init__()
         cards = [int(c) for c in cards]
         offsets = np.concatenate([[0], np.cumsum(cards)[:-1]]).astype("int64")
@@ -82,22 +83,37 @@ class EmbGRUClassifier(nn.Module):
                           dropout=dropout if layers > 1 else 0.0,
                           bidirectional=bidirectional)
         out_dim = hidden * (2 if bidirectional else 1)
+        self.pooling = pooling
+        if pooling == "attention":
+            self.attn = nn.Linear(out_dim, 1)
+        # attention pooling concatenates pooled + last hidden -> 2*out_dim head input
+        head_in = out_dim * 2 if pooling == "attention" else out_dim
         self.head = nn.Sequential(
-            nn.Linear(out_dim, hidden), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(head_in, hidden), nn.ReLU(), nn.Dropout(dropout),
             nn.Linear(hidden, 1),
         )
         self.bidirectional = bidirectional
+
+    def _last_hidden(self, h):
+        return torch.cat([h[-2], h[-1]], dim=-1) if self.bidirectional else h[-1]
 
     def forward(self, x, lengths):                       # x: (B, L, F) long
         e = self.embed(x + self.offsets)                 # (B, L, F, D)
         e = e.flatten(start_dim=2)                       # (B, L, F*D)
         packed = pack_padded_sequence(e, lengths.cpu(), batch_first=True, enforce_sorted=False)
-        _, h = self.gru(packed)                          # h: (layers*dir, B, hidden)
-        if self.bidirectional:
-            last = torch.cat([h[-2], h[-1]], dim=-1)
-        else:
-            last = h[-1]
-        return self.head(last).squeeze(-1)
+        out_packed, h = self.gru(packed)
+        last = self._last_hidden(h)                      # (B, out_dim)
+        if self.pooling != "attention":
+            return self.head(last).squeeze(-1)
+        # attention pooling over all valid timesteps, concatenated with last hidden
+        out, _ = pad_packed_sequence(out_packed, batch_first=True)   # (B, L, out_dim)
+        L = out.size(1)
+        mask = torch.arange(L, device=out.device)[None, :] < lengths.to(out.device)[:, None]
+        scores = self.attn(out).squeeze(-1)              # (B, L)
+        scores = scores.masked_fill(~mask, float("-inf"))
+        w = torch.softmax(scores, dim=1).unsqueeze(-1)   # (B, L, 1)
+        pooled = (w * out).sum(dim=1)                    # (B, out_dim)
+        return self.head(torch.cat([pooled, last], dim=-1)).squeeze(-1)
 
 
 def _predict(model, store, idx, device, max_len, batch_size):
@@ -115,7 +131,8 @@ def _predict(model, store, idx, device, max_len, batch_size):
 def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
     """Train one embedding bi-GRU per fold. Returns (oof, test_pred, per_fold_auc)."""
     p = {"emb_dim": 8, "hidden": 128, "layers": 1, "dropout": 0.1, "bidirectional": True,
-         "lr": 1e-3, "epochs": 8, "batch_size": 2048, "max_len": 40, "patience": 2}
+         "pooling": "last", "lr": 1e-3, "epochs": 8, "batch_size": 2048, "max_len": 40,
+         "patience": 2}
     if params:
         p.update(params)
     device = get_device()
@@ -135,7 +152,7 @@ def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
         tr_idx = np.where(folds != k)[0]
         va_idx = np.where(folds == k)[0]
         model = EmbGRUClassifier(cards, p["emb_dim"], p["hidden"], p["layers"],
-                                 p["dropout"], p["bidirectional"]).to(device)
+                                 p["dropout"], p["bidirectional"], p["pooling"]).to(device)
         opt = torch.optim.Adam(model.parameters(), lr=p["lr"])
         loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
