@@ -5,15 +5,15 @@ set -euo pipefail
 # reproduce.sh — воспроизведение финального решения от data/raw/ до submission
 #
 # Результат: submissions/final/submission.csv
-#            OOF ROC-AUC = 0.78340, public LB = 0.7835
-#            (5-way rank-blend: avg-bigru + transformer + attn + lgbm + cat)
+#            OOF ROC-AUC = 0.78391, public LB = 0.7836
+#            (5-way rank-blend: avg-bigru + avg-transformer + attn + lgbm + cat)
 #
 # Требования:
 #   - Python 3.11+ с пакетами из requirements.txt (torch с MPS/CUDA для seq-моделей)
 #   - data/raw/train_data.parquet, data/raw/test_data.parquet, data/raw/train_target.csv
 #
-# Время: GBDT-ветка ~10 мин (CPU); seq-ветка — 5 прогонов × ~3-4ч на Apple MPS
-#        (3 сида bi-GRU + attn + transformer). Итого ~15-20ч на M3 Pro.
+# Время: GBDT-ветка ~10 мин (CPU); seq-ветка — 8 прогонов × ~3-4ч на Apple MPS
+#        (3 сида bi-GRU + attn + 3 сида transformer). Итого ~20-25ч на M3 Pro.
 #        seq-прогоны независимы — можно гонять параллельно при наличии памяти.
 # ============================================================================
 
@@ -90,22 +90,41 @@ $PY scripts/06_train_seq.py --config configs/sequence_emb_v2.yaml
 ATTN=$(latest "*_sequence_emb_attn")
 
 # ============================================================================
-# Шаг 7. Transformer-энкодер (декоррелированный диверсификатор, OOF 0.77447)
+# Шаг 7. Transformer-энкодер, seed 42 (база)
 # ============================================================================
 echo ""
-echo "=== Шаг 7/8: Transformer encoder (seed 42) ==="
+echo "=== Шаг 7/10: Transformer encoder (seed 42) ==="
 $PY scripts/06_train_seq.py --config configs/sequence_emb_transformer.yaml
-TRANSF=$(latest "*_sequence_emb_transformer")
+TRANSF42=$(latest "*_sequence_emb_transformer")
 
 # ============================================================================
-# Шаг 8. Rank-blend 5 баз (Nelder-Mead по OOF) → submission
+# Шаг 8. Transformer сиды 101 и 202 (мульти-сид)
 # ============================================================================
 echo ""
-echo "=== Шаг 8/8: rank-blend → submission ==="
+echo "=== Шаг 8/10: Transformer сиды 101, 202 ==="
+$PY scripts/06_train_seq.py --config configs/sequence_emb_transformer.yaml --model-seed 101
+$PY scripts/06_train_seq.py --config configs/sequence_emb_transformer.yaml --model-seed 202
+TRANSF101=$(latest "*_sequence_emb_transformer_s101")
+TRANSF202=$(latest "*_sequence_emb_transformer_s202")
+
+# ============================================================================
+# Шаг 9. Усреднение 3 сидов transformer → декоррелированная seq-база (OOF 0.77955)
+# ============================================================================
+echo ""
+echo "=== Шаг 9/10: усреднение 3 сидов transformer ==="
+$PY scripts/09_avg_seeds.py --runs "$TRANSF42" "$TRANSF101" "$TRANSF202" \
+    --name sequence_emb_transformer_avg
+TRANSF_AVG=$(latest "*_sequence_emb_transformer_avg")
+
+# ============================================================================
+# Шаг 10. Rank-blend 5 баз (Nelder-Mead по OOF) → submission
+# ============================================================================
+echo ""
+echo "=== Шаг 10/10: rank-blend → submission ==="
 $PY scripts/07_ensemble.py --runs \
-    "$LGBM" "$CAT" "$BIGRU_AVG" "$ATTN" "$TRANSF" \
-    --name ens_5way_seqavg_attn_transf
-ENS=$(latest "*_ens_5way_seqavg_attn_transf")
+    "$LGBM" "$CAT" "$BIGRU_AVG" "$ATTN" "$TRANSF_AVG" \
+    --name ens_5way_seqavg_attn_transfavg
+ENS=$(latest "*_ens_5way_seqavg_attn_transfavg")
 
 $PY scripts/04_predict_submit.py --run "$ENS"
 
@@ -118,5 +137,5 @@ echo "==========================================================================
 echo "ГОТОВО. Финальный submission: submissions/final/submission.csv"
 echo "  run_id : $ENS"
 echo "  SHA256 : $SHA"
-echo "  Ожидаемый OOF ROC-AUC = 0.78340, public LB ≈ 0.7835"
+echo "  Ожидаемый OOF ROC-AUC = 0.78391, public LB ≈ 0.7836"
 echo "============================================================================"
