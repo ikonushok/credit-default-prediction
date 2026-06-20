@@ -97,14 +97,14 @@ class EmbGRUClassifier(nn.Module):
     def _last_hidden(self, h):
         return torch.cat([h[-2], h[-1]], dim=-1) if self.bidirectional else h[-1]
 
-    def forward(self, x, lengths):                       # x: (B, L, F) long
+    def _head_input(self, x, lengths):                   # x: (B, L, F) long
         e = self.embed(x + self.offsets)                 # (B, L, F, D)
         e = e.flatten(start_dim=2)                       # (B, L, F*D)
         packed = pack_padded_sequence(e, lengths.cpu(), batch_first=True, enforce_sorted=False)
         out_packed, h = self.gru(packed)
         last = self._last_hidden(h)                      # (B, out_dim)
         if self.pooling != "attention":
-            return self.head(last).squeeze(-1)
+            return last
         # attention pooling over all valid timesteps, concatenated with last hidden
         out, _ = pad_packed_sequence(out_packed, batch_first=True)   # (B, L, out_dim)
         L = out.size(1)
@@ -113,7 +113,14 @@ class EmbGRUClassifier(nn.Module):
         scores = scores.masked_fill(~mask, float("-inf"))
         w = torch.softmax(scores, dim=1).unsqueeze(-1)   # (B, L, 1)
         pooled = (w * out).sum(dim=1)                    # (B, out_dim)
-        return self.head(torch.cat([pooled, last], dim=-1)).squeeze(-1)
+        return torch.cat([pooled, last], dim=-1)
+
+    def forward(self, x, lengths):                       # x: (B, L, F) long
+        return self.head(self._head_input(x, lengths)).squeeze(-1)
+
+    def forward_repr(self, x, lengths):
+        """Penultimate `hidden`-d representation ReLU(head[0](pooled)) for stacking."""
+        return torch.relu(self.head[0](self._head_input(x, lengths)))
 
 
 class EmbTransformerClassifier(nn.Module):
@@ -172,8 +179,27 @@ def _predict(model, store, idx, device, max_len, batch_size):
     return out
 
 
-def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
-    """Train one embedding bi-GRU per fold. Returns (oof, test_pred, per_fold_auc)."""
+def _predict_repr(model, store, idx, device, max_len, batch_size, repr_dim):
+    """Penultimate representation per id (float16), for embedding-stacking."""
+    model.eval()
+    out = np.zeros((len(idx), repr_dim), dtype="float16")
+    with torch.no_grad():
+        for s in range(0, len(idx), batch_size):
+            b = idx[s:s + batch_size]
+            x, lens = _make_batch(store, b, max_len)
+            r = model.forward_repr(x.to(device), lens.to(device))
+            out[s:s + batch_size] = r.float().cpu().numpy().astype("float16")
+    return out
+
+
+def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42,
+             collect_repr: bool = False):
+    """Train one embedding bi-GRU per fold. Returns (oof, test_pred, per_fold_auc).
+
+    If ``collect_repr`` (gru arch only), also returns ``(oof_emb, test_emb)``:
+    leak-safe penultimate representations per id — each fold's val/test rows come
+    from a model that did not train on them — for embedding-stacking into a GBDT.
+    """
     p = {"arch": "gru", "emb_dim": 8, "hidden": 128, "layers": 1, "dropout": 0.1,
          "bidirectional": True, "pooling": "last", "lr": 1e-3, "epochs": 8,
          "batch_size": 2048, "max_len": 40, "patience": 2,
@@ -193,6 +219,10 @@ def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
     test_pred = np.zeros(len(test_store.uniq_ids), dtype="float32")
     test_idx = np.arange(len(test_store.uniq_ids))
     per_fold = []
+    if collect_repr:
+        repr_dim = int(p["hidden"])
+        oof_emb = np.zeros((len(y), repr_dim), dtype="float16")
+        test_emb = np.zeros((len(test_store.uniq_ids), repr_dim), dtype="float32")
 
     for k in range(n_folds):
         tr_idx = np.where(folds != k)[0]
@@ -233,7 +263,15 @@ def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
         model.load_state_dict(best_state)
         oof[va_idx] = _predict(model, train_store, va_idx, device, p["max_len"], p["batch_size"])
         test_pred += _predict(model, test_store, test_idx, device, p["max_len"], p["batch_size"]) / n_folds
+        if collect_repr:
+            oof_emb[va_idx] = _predict_repr(
+                model, train_store, va_idx, device, p["max_len"], p["batch_size"], repr_dim)
+            test_emb += _predict_repr(
+                model, test_store, test_idx, device, p["max_len"], p["batch_size"], repr_dim
+            ).astype("float32") / n_folds
         per_fold.append(best_auc)
         print(f"[seq] fold {k}: best val_auc={best_auc:.5f}", flush=True)
 
+    if collect_repr:
+        return oof, test_pred, per_fold, oof_emb, test_emb
     return oof, test_pred, per_fold
