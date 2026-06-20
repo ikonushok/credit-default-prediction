@@ -1,0 +1,20 @@
+name: sequence_emb_transformer
+model: sequence
+feature_set: raw_sequence
+seed: 42
+n_folds: 5
+notes: "Phase 3 #3: per-column embeddings + Transformer encoder (self-attention, learned positions). Same folds as bigru; goal is a decorrelated seq base for the blend."
+params:
+  arch: transformer
+  emb_dim: 8
+  d_model: 128
+  nhead: 4
+  layers: 2
+  dim_feedforward: 256
+  dropout: 0.1
+  hidden: 128
+  lr: 0.001
+  epochs: 10
+  batch_size: 2048
+  max_len: 40
+  patience: 2

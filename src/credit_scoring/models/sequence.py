@@ -116,6 +116,50 @@ class EmbGRUClassifier(nn.Module):
         return self.head(torch.cat([pooled, last], dim=-1)).squeeze(-1)
 
 
+class EmbTransformerClassifier(nn.Module):
+    """Same per-column embedding front-end as the GRU, but a self-attention
+    Transformer encoder over timesteps (different inductive bias → decorrelates
+    from the recurrent model for ensembling). Learned positional embeddings make
+    it order-aware; padded steps are masked out of attention and pooling."""
+
+    def __init__(self, cards: np.ndarray, emb_dim: int = 8, d_model: int = 128,
+                 nhead: int = 4, layers: int = 2, dim_feedforward: int = 256,
+                 dropout: float = 0.1, hidden: int = 128, max_len: int = 40):
+        super().__init__()
+        cards = [int(c) for c in cards]
+        offsets = np.concatenate([[0], np.cumsum(cards)[:-1]]).astype("int64")
+        self.register_buffer("offsets", torch.tensor(offsets, dtype=torch.long))
+        self.embed = nn.Embedding(int(sum(cards)), emb_dim)
+        nn.init.normal_(self.embed.weight, std=0.05)
+        F = len(cards)
+        self.proj = nn.Linear(F * emb_dim, d_model)
+        self.pos = nn.Embedding(max_len, d_model)
+        nn.init.normal_(self.pos.weight, std=0.02)
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model, nhead, dim_feedforward=dim_feedforward, dropout=dropout,
+            batch_first=True, norm_first=True, activation="gelu")
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=layers)
+        self.attn = nn.Linear(d_model, 1)
+        self.head = nn.Sequential(
+            nn.Linear(d_model, hidden), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+        self.max_len = max_len
+
+    def forward(self, x, lengths):                       # x: (B, L, F) long
+        B, L, _ = x.shape
+        e = self.embed(x + self.offsets).flatten(start_dim=2)   # (B, L, F*D)
+        h = self.proj(e)                                 # (B, L, d_model)
+        pos_ids = torch.arange(L, device=x.device).clamp_max(self.max_len - 1)
+        h = h + self.pos(pos_ids)[None]                  # broadcast positions
+        pad_mask = torch.arange(L, device=x.device)[None, :] >= lengths.to(x.device)[:, None]
+        h = self.encoder(h, src_key_padding_mask=pad_mask)       # (B, L, d_model)
+        scores = self.attn(h).squeeze(-1).masked_fill(pad_mask, float("-inf"))
+        w = torch.softmax(scores, dim=1).unsqueeze(-1)   # (B, L, 1)
+        pooled = (w * h).sum(dim=1)                       # (B, d_model)
+        return self.head(pooled).squeeze(-1)
+
+
 def _predict(model, store, idx, device, max_len, batch_size):
     model.eval()
     out = np.zeros(len(idx), dtype="float32")
@@ -130,9 +174,11 @@ def _predict(model, store, idx, device, max_len, batch_size):
 
 def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
     """Train one embedding bi-GRU per fold. Returns (oof, test_pred, per_fold_auc)."""
-    p = {"emb_dim": 8, "hidden": 128, "layers": 1, "dropout": 0.1, "bidirectional": True,
-         "pooling": "last", "lr": 1e-3, "epochs": 8, "batch_size": 2048, "max_len": 40,
-         "patience": 2}
+    p = {"arch": "gru", "emb_dim": 8, "hidden": 128, "layers": 1, "dropout": 0.1,
+         "bidirectional": True, "pooling": "last", "lr": 1e-3, "epochs": 8,
+         "batch_size": 2048, "max_len": 40, "patience": 2,
+         # transformer-only knobs (ignored by gru)
+         "d_model": 128, "nhead": 4, "dim_feedforward": 256}
     if params:
         p.update(params)
     device = get_device()
@@ -151,8 +197,13 @@ def train_cv(train_store, y, folds, test_store, params=None, seed: int = 42):
     for k in range(n_folds):
         tr_idx = np.where(folds != k)[0]
         va_idx = np.where(folds == k)[0]
-        model = EmbGRUClassifier(cards, p["emb_dim"], p["hidden"], p["layers"],
-                                 p["dropout"], p["bidirectional"], p["pooling"]).to(device)
+        if p["arch"] == "transformer":
+            model = EmbTransformerClassifier(
+                cards, p["emb_dim"], p["d_model"], p["nhead"], p["layers"],
+                p["dim_feedforward"], p["dropout"], p["hidden"], p["max_len"]).to(device)
+        else:
+            model = EmbGRUClassifier(cards, p["emb_dim"], p["hidden"], p["layers"],
+                                     p["dropout"], p["bidirectional"], p["pooling"]).to(device)
         opt = torch.optim.Adam(model.parameters(), lr=p["lr"])
         loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 

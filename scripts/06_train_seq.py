@@ -25,9 +25,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--nrows", type=int, default=None, help="smoke: read first N rows")
+    ap.add_argument("--model-seed", type=int, default=None,
+                    help="override model-init seed only; folds stay on cfg.seed "
+                         "(for multi-seed averaging on identical folds)")
     args = ap.parse_args()
 
     cfg = RunConfig.from_yaml(args.config)
+    model_seed = args.model_seed if args.model_seed is not None else cfg.seed
+    if args.model_seed is not None:
+        cfg.name = f"{cfg.name}_s{args.model_seed}"
     run_id = tracking.now_run_id(cfg.name)
     run_dir = C.ARTIFACTS / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +60,7 @@ def main() -> None:
                           n_folds=cfg.n_folds, seed=cfg.seed)
 
     oof, test_pred, per_fold = seq.train_cv(
-        train_store, y, folds, test_store, params=cfg.params, seed=cfg.seed)
+        train_store, y, folds, test_store, params=cfg.params, seed=model_seed)
 
     rep = metrics.fold_report(y, oof, folds)
     rep["per_fold_best_val_auc"] = per_fold
