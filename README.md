@@ -1,53 +1,61 @@
 # Credit Default Prediction
 
-Проект для задачи Альфа-Банка x МФТИ «Кредитный скоринг».
+Проект для задачи Альфа-Банка × МФТИ «Кредитный скоринг» (прогноз дефолта).
+
+**Финальный результат: OOF ROC-AUC = 0.78340 → Public LB = 0.7835.**
+
+Подробное описание решения — в [SOLUTION.md](SOLUTION.md). Разведочный анализ данных — в [EDA-ноутбуке](notebooks/eda_final.ipynb).
+
+## Quick Start — воспроизведение результата
+
+```bash
+# 1. Установить зависимости (нужен torch с MPS/CUDA для seq-моделей)
+pip install -r requirements.txt
+
+# 2. Положить данные
+#    data/raw/train_data.parquet
+#    data/raw/test_data.parquet
+#    data/raw/train_target.csv
+
+# 3. Запустить воспроизведение
+bash reproduce.sh
+
+# 4. Результат
+#    submissions/final/submission.csv
+```
+
+Скрипт `reproduce.sh` последовательно строит агрегаты на `id`, обучает LightGBM + CatBoost, три сида bi-GRU (+ усреднение), attention-GRU и Transformer-энкодер, затем собирает 5-way rank-percentile blend. GBDT-ветка — минуты на CPU; seq-ветка — 5 прогонов по ~3-4ч на Apple MPS (итого ~15-20ч).
 
 ## Цель проекта
 
-Построить воспроизводимую ML-модель, которая прогнозирует вероятность выхода клиента в дефолт по кредиту (неплатёж более 3 месяцев в течение года) на основе истории его кредитных продуктов.
+Построить воспроизводимую ML-модель, которая прогнозирует вероятность выхода клиента в дефолт по кредиту (неплатёж более 3 месяцев в течение года) по истории его кредитных продуктов.
 
-Целевая переменная (`flag` в `train_target.csv`):
-
-- `flag = 1` — клиент вышел в дефолт;
-- `flag = 0` — клиент выплатил кредит;
-- доля дефолтов ≈ 3.55% — сильный дисбаланс классов.
-
-Основная метрика качества:
-
-- ROC-AUC (PR-AUC — как вспомогательная проверка).
-
-Итоговый артефакт:
-
-- CSV-файл с вероятностью дефолта на каждый `id`, совместимый с форматом `sample_submission.csv`.
+- Целевая переменная: `flag` (1 — дефолт, 0 — выплатил), доля дефолтов ≈ 3.55%.
+- Метрика: ROC-AUC (PR-AUC — вспомогательная проверка).
+- Итоговый артефакт: CSV с вероятностью дефолта на каждый `id`, совместимый с `sample_submission.csv`.
 
 ## Данные
-
-Ожидаемые локальные файлы:
 
     data/raw/train_data.parquet      # обучающая история кредитных продуктов (long)
     data/raw/test_data.parquet       # тестовая история (long)
     data/raw/train_target.csv        # метки id, flag для train
-    data/Кредитный скорринг/sample_submission.csv   # формат сабмита id, flag
+    data/Кредитный скорринг/sample_submission.csv   # формат сабмита
 
-Формат **long**: один `id` (заявка) = несколько строк, по одной на кредитный продукт, упорядоченных по `rn`. Метка — одна на `id`, поэтому историю агрегируем в один вектор признаков на `id`. Размеры: train ≈ 18.3M строк / 2.10M `id`, test ≈ 7.85M / 0.90M `id`. Файлы с данными не коммитятся в Git.
-
-Разведочный анализ данных (дисбаланс, длины последовательностей, кардинальности кодов, дрейф) — в ноутбуке [`notebooks/eda_final.ipynb`](notebooks/eda_final.ipynb).
+Формат **long**: один `id` = несколько строк, по одной на кредитный продукт, упорядоченных по `rn`. Метка — одна на `id`. Размеры: train ≈ 18.3M строк / 2.10M `id`, test ≈ 7.85M / 0.90M `id`. Все 59 признаков — целочисленные категориальные коды. Файлы с данными не коммитятся в Git.
 
 ## Ограничения
 
-- Python 3.10+.
-- Только open-source библиотеки.
+- Python 3.10+, только open-source библиотеки.
 - Используются только данные, предоставленные в рамках задания.
 - Нельзя использовать `flag` как признак; он джойнится по `id` только в train.
 - Нельзя использовать `id`/`rn` как сырые предикторы (это порядковый временной индекс).
-- Нельзя использовать test labels или информацию из public leaderboard для подгонки модели.
-- Сабмиты на платформу — ограниченный ресурс: не более 3 загрузок в день.
+- Нельзя использовать test labels или public leaderboard для подгонки модели.
+- Сабмиты на платформу — ограниченный ресурс.
 
 ## Структура проекта
 
     data/raw/              # исходные parquet/csv, не коммитятся
-    data/interim/          # промежуточные артефакты
-    data/processed/        # агрегированные признаки на id (train/test_features__<set>.parquet)
+    data/processed/        # агрегированные признаки на id (train/test_features*.parquet)
 
     src/credit_scoring/    # основной Python-пакет проекта
       config.py            # пути, seed, группы колонок, RunConfig (YAML)
@@ -61,147 +69,106 @@
       models/
         lgbm.py            # LightGBM
         catboost_model.py  # CatBoost
-        sequence.py        # Embedding bi-GRU над последовательностью продуктов (torch/MPS)
+        sequence.py        # Embedding bi-GRU / attention / Transformer (torch/MPS)
 
-    scripts/               # CLI-скрипты для запусков (01..07)
+    scripts/               # CLI-скрипты для запусков (01..09)
     configs/               # YAML-конфиги прогонов
     experiments/           # experiment_log.csv, cards/, отчёты и логи
     artifacts/             # per-run: folds, OOF/test predictions, metrics, config
-    submissions/           # финальные CSV-сабмиты (всегда в корне проекта)
+    submissions/           # финальные CSV-сабмиты и папки upload
+    notebooks/             # eda_final.ipynb
     agents/                # 21 специализированный агент (см. agents/README.md)
+
+## Текущая реализация
+
+Рабочий контур — набор воспроизводимых CLI-скриптов и per-run артефактов (а не один entrypoint):
+
+- `scripts/01_eda.py` — разведочный анализ, `experiments/eda_report.md`;
+- `scripts/02_aggregate.py` — long → вектор признаков на `id`;
+- `scripts/03_train.py` — GBDT (LightGBM / CatBoost) по `id`-фолдам;
+- `scripts/06_train_seq.py` — seq-модели (bi-GRU / attention / Transformer), флаг `--model-seed` для мульти-сида;
+- `scripts/09_avg_seeds.py` — усреднение сидов одной архитектуры в низкодисперсную базу;
+- `scripts/07_ensemble.py` — rank-percentile blend (Nelder-Mead по OOF);
+- `scripts/04_predict_submit.py` — сборка и валидация submission;
+- `scripts/05_compare.py` — сравнение прогонов на одних фолдах;
+- `scripts/08_stack_autogluon.py` — AutoGluon-мета-стекер (проверен, повторяет rank-blend — закрыт).
+
+Ключевые подтверждённые артефакты:
+
+- финальный 5-way бленд: `artifacts/20260620_094454_ens_5way_seqavg_attn_transf`;
+- усреднённая bi-GRU база (3 сида): `artifacts/20260620_064150_sequence_emb_bigru_avg`;
+- карточки сабмитов: `experiments/cards/`; журнал: `experiments/experiment_log.csv`;
+- кандидаты на загрузку: `submissions/upload_20260620/`.
 
 ## Рекомендуемый порядок работы
 
 ### 1. Data quality / EDA
 
-Перед моделированием необходимо проверить:
+Перед моделированием проверяется: размеры train/test/target/sample; наличие `flag` только в `train_target.csv`; совместимость схем (61 целочисленная колонка); распределение rows-per-`id` (~8.7); совпадение множеств `id` (пересечение train/test = 0); дрейф по диапазону `id` (сплит временной); частоты `enc_loans_*` / `enc_paym_*`; sentinel-кодирование (`pclose_flag=1` → `pre_pterm=4`).
 
-- размеры train/test/target/sample;
-- наличие `flag` только в `train_target.csv`;
-- совместимость train/test schema (61 целочисленная колонка);
-- распределение rows-per-`id` (long-формат, ~8.7 строк/id);
-- совпадение множеств `id` (train_data == train_target, test_data == sample_submission, пересечение = 0);
-- дрейф train/test по диапазону `id` (сплит временной: train — ранние `id`, test — поздние);
-- частоты категорий (`enc_loans_*`) и платёжных статусов (`enc_paym_*`);
-- sentinel-кодирование пропусков (`pclose_flag=1` → `pre_pterm=4`, `fclose_flag=1` → `pre_fterm=8`).
+    python scripts/01_eda.py        # -> experiments/eda_report.md
 
-Ожидаемые артефакты:
-
-    experiments/eda_report.md
-
-Команда:
-
-    python scripts/01_eda.py
+Визуальный разбор — в [notebooks/eda_final.ipynb](notebooks/eda_final.ipynb).
 
 ### 2. Агрегация long → id
 
-Каждый `id` сворачивается в один вектор признаков (агрегация строго внутри `id`). Feature sets заданы реестром блоков в `features.py`; результат версионируется на диске.
+Каждый `id` сворачивается в один вектор (агрегация строго внутри `id`). Feature sets заданы реестром блоков в `features.py`, результат версионируется.
 
     python scripts/02_aggregate.py --feature-set baseline
-    # -> data/processed/{train,test}_features__baseline.parquet
-
-Чтобы **добавить признаки**: написать новый блок `@block("...")`, зарегистрировать набор в `FEATURE_SETS`, переагрегировать с `--feature-set <name>` и сравнить с baseline на тех же фолдах.
 
 ### 3. Validation design
 
-Используется `StratifiedKFold(5, seed=42)` по `id` после агрегации (одна строка = один `id`, утечка строк невозможна). Дополнительно — **time-holdout** (поздние 20% `id`): оценка временного дрейфа, поскольку платформенный тест временной.
+`StratifiedKFold(5, seed=42)` по `id` после агрегации (одна строка = один `id`, утечка строк невозможна). Те же фолды используют и seq-модели для ансамблируемости. Дополнительно — **time-holdout** (поздние 20% `id`) как диагностика дрейфа. Fold assignments детерминированы по seed.
 
-Fold assignments детерминированы по seed (не по случайному порядку).
+**Ключевой вывод валидации:** реальный Public совпал с random-CV OOF (гэп ≈0 на финале), а time-holdout оказался переоценкой дрейфа. Поэтому **отбор моделей ведём по OOF** — приросты переносятся на LB без траты загрузок.
 
 ### 4. Baseline model
 
-Первый baseline — LightGBM на агрегатах:
-
-- обработка дисбаланса через `scale_pos_weight`;
-- per-fold и OOF ROC-AUC + PR-AUC;
-- сравнение random-CV vs time-holdout;
-- сохранённые folds, OOF/test predictions, config, metrics;
-- feature manifest (182 агрегата из baseline-блоков).
-
-Команда:
+LightGBM / CatBoost на 182 агрегатах (`scale_pos_weight≈27` / `auto_class_weights=Balanced`), per-fold + OOF ROC-AUC, time-holdout cross-check, сохранённые folds/OOF/test/config/metrics.
 
     python scripts/03_train.py --config configs/lgbm_baseline.yaml
+    python scripts/03_train.py --config configs/catboost.yaml
 
 ### 5. Feature engineering
 
-Рабочие признаки (используются в baseline, 182 агрегата):
+Рабочие признаки (baseline, 182 агрегата): volume/recency, delinquency, payment-status (`enc_paym_*`), amounts/utilization (ordinal-бины), closure/status rates, categorical diversity, last-product.
 
-- **volume/recency** — число продуктов (`n_products`), min/last `pre_since_opened/confirmed`;
-- **delinquency** — sum/mean/max `pre_loans5/530/3060/6090/90`, агрегаты `is_zero_loans*`;
-- **payment-status** — mean/max `enc_paym_0..24`, cross-slot `enc_paym_overall_mean/max`;
-- **amounts/utilization** — mean/max/min/std `pre_loans_credit_limit`, `pre_util`, `pre_over2limit` и др. (как ordinal-бины, не сырые суммы);
-- **closure/status** — rates `pclose_flag`/`fclose_flag`, распределение `enc_loans_credit_status`;
-- **categorical diversity** — nunique + per-category counts для `enc_loans_*`;
-- **last product** — значения ключевых колонок последнего (по `rn`) продукта.
+Проверены и **закрыты** (ablation на тех же фолдах, δ OOF ≤ 0.0002): `term_gaps`, `delinq_share`, `paym_trend`, `term_clean`. Вывод: **GBDT на плато ~0.755** — ручные агрегаты не добавляют сигнала; основной рычаг — в порядке продуктов (sequence-модель), который агрегаты уничтожают.
 
-Проверены и **закрыты** (экспериментально нейтральные, ablation на тех же фолдах):
+    python scripts/05_compare.py --base <baseline_run> --cand <cand_run>
 
-- `term_gaps` (pre_pterm − pre_fterm, till_pclose − till_fclose) — δ OOF = −0.0001 (шум);
-- `delinq_share` (доля продуктов с просрочкой, суммарная) — выводится из baseline;
-- `paym_trend` (тренд enc_paym recent vs early) — δ OOF = 0 (шум);
-- `term_clean` (sentinel-aware агрегаты сроков) — δ OOF = +0.0002 (шум, информация уже в флагах).
+### 6. Sequence models (главный рычаг)
 
-Вывод: **GBDT-ветка вышла на плато ~0.755 OOF** — ручные производные агрегаты не добавляют сигнала. Основной рычаг — в представлении данных (sequence-модель).
+Каждый `id` — последовательность продуктов (порядок `rn`). Все 59 колонок — категориальные коды, поэтому каждая получает собственный обучаемый эмбеддинг (общая `nn.Embedding` + per-column offsets). Три архитектуры над общим фронт-эндом:
 
-Все supervised-преобразования выполняются внутри CV-folds. Сравнение:
+- **Embedding bi-GRU** — last-hidden pooling. OOF **0.77982** (+0.025 к scaled-numeric GRU — это и есть главный рычаг качества).
+- **Attention bi-GRU** — пуллинг вниманием. OOF 0.77878 (диверсификатор).
+- **Transformer-энкодер** — self-attention, learned positions. OOF 0.77447 (слабее, но декоррелирован 0.943).
 
-    python scripts/05_compare.py --base <baseline_run> --cand <v2_run>
+```bash
+python scripts/06_train_seq.py --config configs/sequence_emb.yaml              # bi-GRU
+python scripts/06_train_seq.py --config configs/sequence_emb_v2.yaml           # attention
+python scripts/06_train_seq.py --config configs/sequence_emb_transformer.yaml  # transformer
+```
 
-### 6. Sequence model (Embedding bi-GRU)
+**Мульти-сид:** bi-GRU обучается на сидах 42/101/202 при фиксированных фолдах (варьируется только init через `--model-seed`), затем усредняется — OOF **0.78248** (+0.0019), бьёт прежний бленд в одиночку.
 
-Каждый `id` — последовательность кредитных продуктов (порядок `rn`), каждый продукт — вектор из 59 целочисленных колонок. Все 59 колонок — категориальные коды (бины 0–19, статусы 0–4, флаги), поэтому каждая получает собственный обучаемый эмбеддинг (общая таблица `nn.Embedding` + per-column offsets, размер = `max(train, test) + 1`). Эмбеддинги конкатенируются по таймстепу и подаются в **двунаправленный GRU**; финальные скрытые состояния обоих направлений → MLP-голова → логит дефолта. Паддинг замаскирован через `pack_padded_sequence`.
+```bash
+python scripts/06_train_seq.py --config configs/sequence_emb.yaml --model-seed 101
+python scripts/09_avg_seeds.py --runs <bigru_42> <bigru_101> <bigru_202> --name sequence_emb_bigru_avg
+```
 
-Это альтернативное представление данных — модель учится на сырых последовательностях, а не на агрегатах. Те же `id`-фолды (seed=42) для ансамблируемости с GBDT.
+### 7. Ensemble
 
-Embedding bi-GRU — **главный рычаг качества**: одиночная модель дала OOF **0.7798** (+0.025 к GBDT). Эмбеддинги позволяют модели выучить представление каждого кода, а bi-GRU — паттерны в последовательности.
+Rank-percentile blend: предсказания каждой базы ранг-нормализуются (0..1) для выравнивания масштабов (GBDT-вероятности vs NN-сигмоида); веса — Nelder-Mead по OOF ROC-AUC; OOF/test выравниваются по **значению `id`**.
 
-Команда:
+    python scripts/07_ensemble.py --runs <lgbm> <cat> <bigru_avg> <attn> <transf> --name ens
 
-    python scripts/06_train_seq.py --config configs/sequence_emb.yaml
+Финальный 5-way бленд: **avg_bigru 0.625 + transformer 0.213 + attn 0.161 + lgbm 0.001 + cat 0.0** → OOF **0.78340**. Transformer получает вес 0.21 при слабейшем одиночном OOF — заслуга декорреляции. AutoGluon-мета и stacking через агрегаты проверены — не бьют линейный rank-blend.
 
-### 7. Model training (CatBoost)
+### 8. Submission build
 
-    python scripts/03_train.py --config configs/catboost.yaml
-
-Проверенные модели и итоги:
-
-| модель | OOF ROC-AUC | роль в финальном 5-way решении |
-|---|---|---|
-| LightGBM / CatBoost (182 агрегата) | 0.7548 | страховка, вес ≈0 |
-| Sequence GRU (scaled-numeric) | 0.7547 | закрыт (заменён эмбеддингами) |
-| Embedding bi-GRU (seed 42) | 0.77982 | база для мульти-сида |
-| **avg bi-GRU (3 сида)** | **0.78248** | **champion** (вес 0.625) |
-| attention bi-GRU | 0.77878 | диверсификатор (вес 0.161) |
-| Transformer encoder | 0.77447 | декоррелир. (0.943), вес 0.213 |
-
-Сравнивать можно только эксперименты с одинаковой CV-схемой, одинаковым target definition и понятной feature policy.
-
-### 8. Ensemble
-
-Ансамбль допустим только при наличии aligned OOF/test predictions (по **значению `id`**, не по позиции) и подтверждённого прироста OOF ROC-AUC выше fold/seed-шума.
-
-Рабочий метод — **rank-percentile blend**:
-
-    blend = emb_gru_rank × w1 + catboost_rank × w2 + lgbm_rank × w3
-
-Rank-нормализация выполняется для выравнивания масштабов (GBDT-вероятности vs NN-сигмоида). Веса подбираются Nelder-Mead по OOF ROC-AUC (неотрицательные, сумма = 1). Разные модели могут использовать разные OOF-фолды (с предупреждением). Финальный 5-way бленд: **OOF 0.78340** (avg_bigru 0.625 + transformer 0.213 + attn 0.161 + lgbm/cat ≈0).
-
-    python scripts/07_ensemble.py --runs <run_a> <run_b> <run_c> --name ens
-
-### 9. Submission build
-
-Перед отправкой на платформу проверяется:
-
-- колонки совпадают с `sample_submission.csv` (`id`, `flag`);
-- число строк совпадает (900 000);
-- порядок `id` и mapping проверены;
-- вероятности находятся в диапазоне `[0, 1]`;
-- нет NaN/inf;
-- файл имеет уникальное имя;
-- SHA256 записан в submission card;
-- проведён red-team review.
-
-Команда:
+Проверки перед отправкой: колонки совпадают с `sample_submission.csv` (`id`, `flag`); 900 000 строк; `id`-mapping; вероятности в `[0, 1]`; нет NaN/inf; уникальное имя; SHA256 в submission card.
 
     python scripts/04_predict_submit.py --run <run_id>
     # -> submissions/<run_id>.csv + experiments/cards/<run_id>.md
@@ -217,7 +184,7 @@ Rank-нормализация выполняется для выравниван
 
 ## Текущий статус
 
-**Public best: 78.35** (ROC-AUC × 100). Пайплайн прогнан end-to-end; финал — 5-way rank-blend seq-моделей. Воспроизведение: `./reproduce.sh`.
+**Финальный Public ROC-AUC: 0.7835 (78.35).** Финал — 5-way rank-blend seq-моделей; GBDT-ветка вышла на плато и весит ≈0.
 
 ### Результаты (5-fold OOF ROC-AUC)
 
@@ -239,22 +206,18 @@ Rank-нормализация выполняется для выравниван
 | 06-19 | `ens_lgb_cat_seqemb` (v2) | 0.7808 | 78.261 | +0.002 |
 | **06-20** | `ens_5way_seqavg_attn_transf` | **0.78340** | **78.35** | **+0.000** |
 
-**Ключевой вывод по валидации:** Public почти точно совпадает с OOF (на финале гэп ≈0). Значит **random-CV OOF — надёжный прокси лидерборда**: улучшая OOF, прямо улучшаем Public, и приросты можно принимать по OOF без траты загрузок. time-holdout (~0.73) оказался переоценкой дрейфа, как критерий не используется.
-
 ### Ключевые находки
 
-- GBDT-ветка (агрегаты) на плато ~0.755 — производные фичи (`v2`/`v3`) в пределах шума; в финале вес ≈0.
-- **Эмбеддинги seq — главный рычаг:** +0.025 OOF (scaled-numeric → emb bi-GRU).
-- **Мульти-сид bi-GRU:** +0.0019 (avg 3 сидов 0.78248), усреднённая база бьёт прежний бленд в одиночку.
+- **Эмбеддинги seq — главный рычаг:** +0.025 OOF (scaled-numeric → emb bi-GRU); порядок продуктов несёт сигнал, который агрегаты теряют.
+- **Мульти-сид bi-GRU:** +0.0019; усреднённая база бьёт прежний бленд в одиночку.
 - **Слабый, но декоррелированный transformer** (0.943 vs avg_bigru) добавил +0.0004 к финалу.
-- Опасения по временному дрейфу не подтвердились — Public ≥ OOF.
-- Sentinel-кодирование пропусков (флаги + фиксированные бины) обрабатывается нативно; `NaN` в данных нет.
+- **OOF — надёжный прокси Public** (гэп ≈0): приросты принимаются по OOF без траты загрузок.
 
 ### Закрытые направления
 
-- Агрегатные feature sets `v2`/`v3` (term_gaps, delinq_share, paym_trend, term_clean) — δ OOF ≤ 0.0002, шум.
-- Scaled-numeric GRU (без эмбеддингов) — 0.7547, заменён Embedding bi-GRU.
-- **AutoGluon как блендер** — OOF-стек повторяет линейный rank-blend (0.78201), обогащение агрегатами вредит (≈−0.0005). Горлышко не в блендере.
+- Агрегатные feature sets `v2`/`v3` — δ OOF ≤ 0.0002, шум.
+- Scaled-numeric GRU (без эмбеддингов) — 0.7547, заменён эмбеддингами.
+- **AutoGluon как блендер** — OOF-стек повторяет rank-blend (0.78201), обогащение агрегатами вредит (≈−0.0005). Горлышко не в блендере, а в базах.
 
 ### Открытые направления
 
