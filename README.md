@@ -1,30 +1,81 @@
 # Credit Default Prediction
 
-Проект для задачи Альфа-Банка × МФТИ «Кредитный скоринг» (прогноз дефолта).
+> Reproducible Python ML pipeline для задачи Альфа-Банка × МФТИ «Кредитный скоринг» (прогноз дефолта по кредиту).
 
 **Финальный результат: OOF ROC-AUC = 0.78391 → Public LB = 0.7836.**
 
+Это не notebook-only эксперимент. Основная ML-логика вынесена в Python-пакет (`src/credit_scoring/`), а notebook используется как отчётный слой для разведочного анализа. Pipeline воспроизводится одной командой `bash reproduce.sh`.
+
 Подробное описание решения — в [SOLUTION.md](SOLUTION.md). Разведочный анализ данных — в [EDA-ноутбуке](notebooks/eda_final.ipynb).
 
-## Quick Start — воспроизведение результата
+---
 
-```bash
-# 1. Установить зависимости (нужен torch с MPS/CUDA для seq-моделей)
-pip install -r requirements.txt
+## Структура проекта
 
-# 2. Положить данные
-#    data/raw/train_data.parquet
-#    data/raw/test_data.parquet
-#    data/raw/train_target.csv
+Репозиторий организован как воспроизводимый Python ML pipeline с конфигурационным подходом к экспериментам.
 
-# 3. Запустить воспроизведение
-bash reproduce.sh
-
-# 4. Результат
-#    submissions/final/submission.csv
+```
+src/credit_scoring/    # переиспользуемый Python-пакет: обработка данных, feature engineering,
+                       # валидация, обучение (LightGBM, CatBoost, bi-GRU, Transformer), inference
+configs/               # YAML-конфигурации экспериментов и моделей
+scripts/               # CLI-скрипты для воспроизводимого запуска pipeline (01..10)
+notebooks/             # EDA-ноутбук как отчётный/аналитический слой
+experiments/           # experiment_log.csv, submission cards, логи обучения
+artifacts/             # per-run артефакты: folds, OOF/test predictions, metrics, config snapshots
+submissions/           # итоговые submission-файлы для загрузки на платформу
+reproduce.sh           # единый скрипт воспроизведения всего pipeline от данных до submission
 ```
 
-Скрипт `reproduce.sh` последовательно строит агрегаты на `id`, обучает LightGBM + CatBoost, три сида bi-GRU (+ усреднение), attention-GRU и Transformer-энкодер, затем собирает 5-way rank-percentile blend. GBDT-ветка — минуты на CPU; seq-ветка — 5 прогонов по ~3-4ч на Apple MPS (итого ~15-20ч).
+## Почему это не notebook-only проект
+
+Хотя в репозитории есть notebook для разведочного анализа, вся реализация pipeline вынесена в Python-код:
+
+- **`src/credit_scoring/`** — переиспользуемый пакет с модулями для чтения данных, агрегации, feature engineering, кросс-валидации, метрик, submission-сборки и моделей (LightGBM, CatBoost, sequence-модели на PyTorch).
+- **`configs/`** — конфигурации экспериментов отделены от кода; смена модели/гиперпараметров — замена YAML-файла.
+- **`scripts/`** — CLI-скрипты запускают pipeline по шагам; каждый прогон детерминирован и логируется.
+- **Notebook** (`notebooks/eda_final.ipynb`) используется исключительно для визуализации и документирования результатов EDA, а не как единственная реализация.
+
+## Воспроизводимость
+
+1. Установить зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Положить данные в `data/raw/`:
+   - `train_data.parquet`
+   - `test_data.parquet`
+   - `train_target.csv`
+
+3. Запустить воспроизводимый pipeline:
+
+```bash
+bash reproduce.sh
+```
+
+4. Результат:
+   - submission → `submissions/final/submission.csv`
+   - метрики и артефакты каждого прогона → `artifacts/<run_id>/`
+   - журнал экспериментов → `experiments/experiment_log.csv`
+   - submission cards → `experiments/cards/`
+
+Время: GBDT-ветка ~10 мин (CPU); seq-ветка — 8 прогонов × ~3-4ч на Apple MPS (итого ~20-25ч). Seq-прогоны независимы и параллелизуемы.
+
+## Что демонстрирует этот проект
+
+- Проектирование воспроизводимого Python ML pipeline (source-code-first, не notebook-first).
+- Config-driven experiments: смена модели/параметров через YAML без правки кода.
+- Feature engineering для скоринговой задачи (long-формат → агрегаты на id).
+- Leakage-aware validation: id-level StratifiedKFold, time-holdout диагностика.
+- Sequence-модели на PyTorch (Embedding bi-GRU, attention-GRU, Transformer encoder) для табличных данных в long-формате.
+- Multi-seed training и seed-averaging для снижения дисперсии.
+- Rank-percentile model blending (Nelder-Mead оптимизация весов по OOF).
+- Оценку качества через ROC-AUC с per-fold отчётом.
+- Разделение между переиспользуемым Python-кодом и notebook-отчётом.
+- Experiment tracking: CSV-журнал, per-run артефакты, submission cards с SHA256.
+
+---
 
 ## Цель проекта
 
@@ -51,33 +102,6 @@ bash reproduce.sh
 - Нельзя использовать `id`/`rn` как сырые предикторы (это порядковый временной индекс).
 - Нельзя использовать test labels или public leaderboard для подгонки модели.
 - Сабмиты на платформу — ограниченный ресурс.
-
-## Структура проекта
-
-    data/raw/              # исходные parquet/csv, не коммитятся
-    data/processed/        # агрегированные признаки на id (train/test_features*.parquet)
-
-    src/credit_scoring/    # основной Python-пакет проекта
-      config.py            # пути, seed, группы колонок, RunConfig (YAML)
-      data_io.py           # чтение parquet с downcast dtypes, target, sample
-      features.py          # реестр блоков фич + feature sets (baseline/v2/v3)
-      aggregate.py         # long -> один вектор признаков на id
-      cv.py                # id-level StratifiedKFold + time-holdout по порядку id
-      metrics.py           # ROC-AUC / PR-AUC и per-fold отчёт
-      submission.py        # сборка и валидация submission по контракту
-      tracking.py          # experiment log и submission cards
-      models/
-        lgbm.py            # LightGBM
-        catboost_model.py  # CatBoost
-        sequence.py        # Embedding bi-GRU / attention / Transformer (torch/MPS)
-
-    scripts/               # CLI-скрипты для запусков (01..09)
-    configs/               # YAML-конфиги прогонов
-    experiments/           # experiment_log.csv, cards/, отчёты и логи
-    artifacts/             # per-run: folds, OOF/test predictions, metrics, config
-    submissions/           # финальные CSV-сабмиты и папки upload
-    notebooks/             # eda_final.ipynb
-    agents/                # 21 специализированный агент (см. agents/README.md)
 
 ## Текущая реализация
 
